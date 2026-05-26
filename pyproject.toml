@@ -1,0 +1,30 @@
+[project]
+name = "pokemon-rl"
+version = "0.1.0"
+description = "Pokemon Red RL agent using PyBoy + Stable-Baselines3 RecurrentPPO"
+requires-python = ">=3.12"
+dependencies = [
+    # Emulator — 2.7.0+ includes the wy_activated_frame fix (menus render correctly)
+    # Previously required a patched fork (Bonsai88/PyBoy); fix was merged upstream in Jan 2026.
+    "pyboy>=2.7.0",
+    # RL framework
+    "stable-baselines3>=2.3.0",
+    "sb3-contrib>=2.3.0",       # RecurrentPPO / MultiInputLstmPolicy
+    # Environment
+    "gymnasium>=0.29.0",
+    "numpy>=1.26.0",
+    # Multi-bot visualization
+    "pygame>=2.5.0",
+    # Human recording (record.py)
+    "pynput>=1.7.0",
+    # Deep learning backend
+    "torch>=2.2.0",
+]
+
+[dependency-groups]
+dev = [
+    "tensorboard>=2.16.0",
+]
+
+[tool.uv]
+package = false

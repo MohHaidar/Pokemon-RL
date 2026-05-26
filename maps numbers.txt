@@ -1,0 +1,29 @@
+Red house 1F: 37
+Red hourse 2F: 38
+Blue house: 39
+Pallet town: 0
+Oak Lab: 40
+Route 1 : 12
+Virdian City: 1
+Virdian City Poke Center: 41
+Virdian City Mart: 42
+Name changer house: 44
+viridian city "school" house: 43
+Route 22: 33
+Route 22 Gate: 193
+Route 2: 13
+Virdian Forest South Gate: 50
+Virdian Forest: 51
+Virdian Forest north gate: 47
+Pewter City: 2
+Pewter Gym: 54
+Pweter City Poke Center: 58
+Pewter speech house: 57
+Pewter Mart: 56
+Pewter Nidoran House: 55
+Pweter Museum 1F: 52
+Pweter Museum 1F: 53
+
+
+verify against this source:
+https://datacrystal.tcrf.net/wiki/Pok%C3%A9mon_Red_and_Blue/RAM_map
