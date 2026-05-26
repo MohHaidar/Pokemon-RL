@@ -226,14 +226,20 @@ def _combat_survivability(
       3. Turn order  — faster side gets a free first hit:
            enemy faster  → subtract 1 turn from ttd  (take a hit before you can act)
            player faster → subtract 1 turn from ttk  (only if ttk > 1, i.e. can't already one-shot)
+    
+    NOTE: This is a rough approximation. Without knowing actual move base power,
+    we assume average ~40 BP. Real damage varies ±50% depending on move choice.
     """
-    p_dmg  = (p_atk * p_atk_m * status_offense_mult(p_status)) / max(e_def * e_def_m, 1)
-    e_dmg  = (e_atk * e_atk_m * status_offense_mult(e_status)) / max(p_def * p_def_m, 1)
+    # Stat-ratio component (used for relative strength even without exact damage)
+    p_stat_ratio = (p_atk * p_atk_m * status_offense_mult(p_status)) / max(e_def * e_def_m, 1)
+    e_stat_ratio = (e_atk * e_atk_m * status_offense_mult(e_status)) / max(p_def * p_def_m, 1)
     p_self = status_passive_dmg(p_status, p_max_hp)
     e_self = status_passive_dmg(e_status, e_max_hp)
 
-    ttk = e_hp / max(p_dmg + e_self, 0.001)
-    ttd = p_hp / max(e_dmg + p_self, 0.001)
+    # For ttd/ttk, we just use stat ratios (relative, not absolute HP values)
+    # This keeps the surv_ratio meaningful without needing exact damage
+    ttk = e_hp / max(p_stat_ratio + e_self, 0.001)
+    ttd = p_hp / max(e_stat_ratio + p_self, 0.001)
 
     # Miss uncertainty → kills take longer
     adj_ttk = ttk / _GEN1_HIT_RATE

@@ -289,23 +289,35 @@ def play(
             e_spd_m  = _stage_mult_of(es.get("spd", _NEUTRAL_STAGE))
             lead     = party[0]
             from ram_map import status_offense_mult, status_passive_dmg
-            # Damage dealt per turn (cross-side: player atk vs enemy def, and vice-versa)
-            p_dmg_turn = (lead["atk_stat"]  * p_atk_m * status_offense_mult(lead.get("status", 0))) \
-                         / max(enemy["def_stat"] * e_def_m, 1) \
-                         + status_passive_dmg(enemy.get("status", 0), enemy["max_hp"])
-            e_dmg_turn = (enemy["atk_stat"] * e_atk_m * status_offense_mult(enemy.get("status", 0))) \
-                         / max(lead["def_stat"]  * p_def_m, 1) \
-                         + status_passive_dmg(lead.get("status", 0), lead["max_hp"])
+            # Approximate Gen 1 damage: ((2*Level+10)/250) * (Atk/Def) * BasePower + 2
+            # Assume average BasePower ≈ 40 for early-game physical moves
+            APPROX_BASE_POWER = 40
+            level_mult_p = (2 * lead["level"] + 10) / 250.0
+            level_mult_e = (2 * enemy["level"] + 10) / 250.0
+            p_dmg_turn = (level_mult_p * lead["atk_stat"] * p_atk_m * status_offense_mult(lead.get("status", 0))
+                          / max(enemy["def_stat"] * e_def_m, 1) * APPROX_BASE_POWER + 2
+                          + status_passive_dmg(enemy.get("status", 0), enemy["max_hp"]))
+            e_dmg_turn = (level_mult_e * enemy["atk_stat"] * e_atk_m * status_offense_mult(enemy.get("status", 0))
+                          / max(lead["def_stat"] * p_def_m, 1) * APPROX_BASE_POWER + 2
+                          + status_passive_dmg(lead.get("status", 0), lead["max_hp"]))
             ttd, ttk, surv = _combat_survivability(
                 lead["hp"],  lead["max_hp"],  lead["atk_stat"],  lead["def_stat"],
                 lead.get("spd_stat", 10),  lead.get("status", 0),  p_atk_m, p_def_m, p_spd_m,
                 enemy["hp"], enemy["max_hp"], enemy["atk_stat"], enemy["def_stat"],
                 enemy.get("spd_stat", 10), enemy.get("status", 0), e_atk_m, e_def_m, e_spd_m,
             )
-            if   surv < 0.5:  verdict = "🚨 OUTMATCHED — RUN"
-            elif surv < 0.83: verdict = "⚠ OUTMATCHED"
-            elif surv < 1.43: verdict = "~ EVEN"
-            else:             verdict = "✓ DOMINANT"
+            hp_ratio = lead["hp"] / max(lead["max_hp"], 1)
+            # Adjust verdict when at critical HP — even "even" fights are dangerous
+            if hp_ratio < CRITICAL_HP_THRESHOLD:
+                verdict = "🚨 CRITICAL HP — RUN"
+            elif surv < 0.5:
+                verdict = "🚨 OUTMATCHED — RUN"
+            elif surv < 0.83:
+                verdict = "⚠ OUTMATCHED"
+            elif surv < 1.43:
+                verdict = "~ EVEN"
+            else:
+                verdict = "✓ DOMINANT"
             lead_str  = _strength_line("LEAD", lead, ps, p_dmg_turn)
             enemy_str = _strength_line(f"ENEMY#{enemy.get('species','?')}", enemy, es, e_dmg_turn)
             battle_line = (
