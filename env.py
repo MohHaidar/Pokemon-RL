@@ -147,7 +147,7 @@ MENU_IDLE_ONSET:     int   = 2     # steps in menu before idle penalty starts
 MENU_IDLE_PENALTY:   float = -0.4  # per step in menu beyond the onset
 
 # ── Battle idle ───────────────────────────────────────────────────────────────
-BATTLE_IDLE_PENALTY: float = -0.05
+BATTLE_IDLE_PENALTY: float = -0.01
 BATTLE_IDLE_GRACE:   int   = 60    # steps before idle penalty starts (allows animation + menu nav)
 
 # ── Low-HP penalty ────────────────────────────────────────────────────────────
