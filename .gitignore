@@ -1,0 +1,6 @@
+__pycache__/*
+logs/*
+recordings/*
+runs/*
+.python-version
+Pokemon_Red*
