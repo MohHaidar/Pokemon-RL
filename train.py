@@ -131,9 +131,9 @@ class ScoreThresholdCallback(BaseCallback):
         return True
 
 
-def make_env(rank: int, seed: int = 0, rom_path: str = "Pokemon_Red.gb"):
+def make_env(rank: int, seed: int = 0, rom_path: str = "Pokemon_Red.gb", max_steps: int = 8_192):
     def _init():
-        env = PokemonRedEnv(rom_path=rom_path, headless=True)
+        env = PokemonRedEnv(rom_path=rom_path, headless=True, max_steps=max_steps)
         env.reset(seed=seed + rank)
         return env
     return _init
@@ -146,15 +146,16 @@ def train(
     resume: str | None   = None,
     seed: int            = 42,
     score_threshold: float = 0.0,   # only save 'best' checkpoints above this score
+    max_steps: int       = 8_192,   # episode length — increase gradually as agent matures
 ) -> None:
     for d in (RUNS_DIR, LOGS_DIR, CHECKPOINT_DIR, BEST_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
     print(f"[train] Spawning {n_envs} parallel environment(s)...")
-    vec_env = SubprocVecEnv([make_env(i, seed, rom_path) for i in range(n_envs)])
+    vec_env = SubprocVecEnv([make_env(i, seed, rom_path, max_steps) for i in range(n_envs)])
     vec_env = VecMonitor(vec_env)
     batch_size_info = max(256, n_envs * 128)
-    print(f"[train] Environments ready. batch_size={batch_size_info}")
+    print(f"[train] Environments ready. batch_size={batch_size_info}, max_steps={max_steps}")
 
     if resume and Path(resume).exists():
         print(f"[train] Resuming from {resume} ...")
@@ -244,13 +245,16 @@ def train(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Pokemon Red PPO agent")
-    parser.add_argument("--rom",    default="Pokemon_Red.gb")
-    parser.add_argument("--envs",   type=int, default=12)
-    parser.add_argument("--steps",  type=int, default=10_000_000)
-    parser.add_argument("--resume", default=None)
-    parser.add_argument("--seed",   type=int, default=42)
+    parser.add_argument("--rom",       default="Pokemon_Red.gb")
+    parser.add_argument("--envs",      type=int, default=12)
+    parser.add_argument("--steps",     type=int, default=10_000_000)
+    parser.add_argument("--resume",    default=None)
+    parser.add_argument("--seed",      type=int, default=42)
     parser.add_argument("--threshold", type=float, default=0.0,
                         help="Only save 'best' checkpoint when mean reward exceeds this (default: 0)")
+    parser.add_argument("--max-steps", type=int, default=8_192,
+                        help="Episode length cap. Start small (e.g. 1024) for early training, "
+                             "increase on resume as the agent matures (default: 8192)")
     args = parser.parse_args()
 
     train(
@@ -260,4 +264,5 @@ if __name__ == "__main__":
         resume          = args.resume,
         seed            = args.seed,
         score_threshold = args.threshold,
+        max_steps       = args.max_steps,
     )

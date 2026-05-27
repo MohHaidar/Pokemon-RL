@@ -317,6 +317,7 @@ class PokemonRedEnv(gymnasium.Env):
         display_frames:  int   = 0,    # extra idle frames after each action (play mode)
         play_frame_skip: int   = 16,   # frames to tick per action step (16 = 1 tile walk in Gen 1)
         state_path:      str   = "initial_state.state",
+        max_steps:       int   = MAX_STEPS,  # curriculum: start small, increase on resume
     ):
         super().__init__()
         self._rom_path        = rom_path
@@ -326,6 +327,7 @@ class PokemonRedEnv(gymnasium.Env):
         self._display_frames  = display_frames
         self._play_frame_skip = play_frame_skip
         self._state_path      = state_path
+        self._max_steps       = max_steps
 
         # Gymnasium spaces
         self.observation_space = spaces.Dict({
@@ -522,7 +524,7 @@ class PokemonRedEnv(gymnasium.Env):
         # Termination / truncation
         terminated = False
         truncated  = False
-        if self._steps >= MAX_STEPS:
+        if self._steps >= self._max_steps:
             truncated = True
         if self._ep_reward < SCORE_FLOOR:
             truncated = True
@@ -657,7 +659,7 @@ class PokemonRedEnv(gymnasium.Env):
         vec[19] = explore_mult
         vec[20] = battle_mult
         vec[21] = len(self._visited_coords) / 2000.0
-        vec[22] = self._steps / max(MAX_STEPS, 1)
+        vec[22] = self._steps / max(self._max_steps, 1)
         vec[23] = float(in_pc)
         vec[24] = nurse_prox / NURSE_PROXIMITY_MAX
         vec[25] = float(lead_hp_r < LOW_HP_THRESHOLD)  if lead else 0.0
@@ -676,7 +678,7 @@ class PokemonRedEnv(gymnasium.Env):
         vec[32] = float(np.clip(self._live_strength_ratio  / 5.0, 0.0, 1.0))
         vec[33] = float(np.clip(self._battle_start_strength / 5.0, 0.0, 1.0))
         vec[34] = len(self._visited_maps) / 17.0
-        vec[35] = min(self._stale_steps / MAX_STEPS, 1.0)
+        vec[35] = min(self._stale_steps / max(self._max_steps, 1), 1.0)
 
         # ── Indices 36-56 (from session notes) ───────────────────────────
         vec[36] = float(items.get("cut",      False))  # HM01 Cut
