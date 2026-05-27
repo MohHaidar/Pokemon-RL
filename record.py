@@ -245,10 +245,15 @@ def run(save_dir: str = "recordings", max_episodes: int | None = None, speed: in
                 break
 
     except KeyboardInterrupt:
-        print("\n  Ctrl+C — stopping.")
+        print("\n\n  Ctrl+C — stopping.")
     finally:
+        print("  Cleaning up...")
         listener.stop()
-        env.close()
+        listener.join(timeout=1.0)  # Wait for listener thread to finish
+        try:
+            env.close()
+        except Exception:
+            pass  # env might already be closed
 
     print(f"\n  Done: {episode} episode(s), {total_steps} total steps.")
     print(f"  Recordings saved in: {os.path.abspath(save_dir)}/")

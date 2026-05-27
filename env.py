@@ -126,19 +126,17 @@ DOOR_SPAM_PENALTY:   float = -3.0
 DOOR_SPAM_THRESHOLD: int   = 60    # steps since last map change; < this → spam (normal entry+exit needs ~30-40 steps)
 
 # ── North-corridor distance reward ────────────────────────────────────────────
-# Pushes the bot northward from the bottom of Pallet Town toward Viridian Forest.
+# Pushes the bot northward from the bottom of Pallet Town toward Viridian City.
 # Uses the same global tile coordinate system as multiplay (MAP_GLOBAL_ORIGIN).
 # Origin = center-bottom of Pallet Town in global tiles: (gx=10, gy=54).
-# Reward fires only on pre-forest maps; silenced once inside the forest itself.
+# Reward fires only on Pallet Town + Route 1 to establish the initial northward push.
+# STOPS in Viridian City so the bot explores freely (Route 22 west, Forest north).
 _DISTANCE_ACTIVE_MAPS: frozenset[int] = frozenset({
     0, 37, 38, 39, 40,          # Pallet Town + its buildings
     12,                          # Route 1
-    1, 41, 42, 43, 44,          # Viridian City + buildings
-    33, 193,                     # Route 22 + gate
-    13,                          # Route 2 (south of forest)
 })
 _DISTANCE_ORIGIN: tuple[int, int] = (10, 54)   # global (gx, gy) — center-bottom Pallet
-DISTANCE_REWARD_SCALE: float = 0.15            # reward per tile of new northward max
+DISTANCE_REWARD_SCALE: float = 1.0              # reward per tile of new northward max
 
 # ── Menu spam / idle ──────────────────────────────────────────────────────────
 MENU_SPAM_PENALTY:   float = -5.0  # for reopening Start menu too quickly after closing
@@ -167,6 +165,14 @@ XP_REWARD_SCALE:     float = 0.07   # per XP point gained
 POKECENTER_ARRIVE:   float = 1.0    # once per visit when entering with HP < 25 %
 POKECENTER_HEAL:     float = 200.0  # one-shot full-heal bonus
 
+# Milestone map rewards — one-time bonus for reaching important early maps
+MILESTONE_MAPS: dict[int, float] = {
+    1:  15.0,   # Viridian City (reached from Route 1)
+    33: 10.0,   # Route 22 (west exploration from Viridian)
+    50: 15.0,   # Viridian Forest S Gate (north from Viridian)
+    51: 20.0,   # Viridian Forest (inside the forest)
+}
+
 # ── Phase multipliers ─────────────────────────────────────────────────────────
 # explore_mult: starts at 1.0, decays toward 0.2 as badge count grows
 # battle_mult:  starts at 1.0, grows toward 2.5 with badges
@@ -181,9 +187,7 @@ SCORE_FLOOR: float = -500.0
 STUCK_STEPS: int   = 500   # no new tiles in this many steps → episode ends
 
 # ── Stale-map penalty ──────────────────────────────────────────────────────────
-STALE_MAP_ONSET:   int   = 64     # steps on same map before penalty starts
-STALE_MAP_RAMP:    int   = 128    # steps over which penalty ramps to max
-STALE_MAP_MAX:     float = -0.12  # max penalty per step (reached after ONSET + RAMP steps)
+STALE_MAP_MAX:     float = -0.12  # max penalty per step (reached when steps_on_map > onset + ramp; onset/ramp computed dynamically from map_area)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,7 +278,7 @@ class PokemonRedEnv(gymnasium.Env):
 
     Observation space (Dict):
         "screen"  : uint8  (84, 84, 4)  — 4-frame grayscale stack
-        "state"   : float32 (77,)       — structured game-state vector
+        "state"   : float32 (91,)       — structured game-state vector
             [0]      lead HP ratio
             [1]      lead level / 100
             [2]      lead status multiplier
@@ -285,10 +289,14 @@ class PokemonRedEnv(gymnasium.Env):
             [15-16]  player x, y (normalised)
             [17-35]  misc exploration / battle scalars
             [36-56]  HMs, items, battle info, moves, PP, dialogue
-            [57-62]  per-slot normalised strength: (lvl/100)²×hp_r×status_mult
-            [63-68]  per-slot status multiplier (1.0=healthy, 0.2-0.85=statused)
-            [69-72]  player stat stages Atk/Def/Spd/Spc, normalised (0=neutral)
-            [73-76]  enemy  stat stages Atk/Def/Spd/Spc, normalised (0=neutral)
+            [57-62]  per-slot survival probability (ttd-based, per slot)
+            [63-68]  per-slot turns-to-die (ttd, per slot)
+            [69-74]  per-slot turns-to-kill (ttk, per slot)
+            [75-80]  per-slot speed advantage vs enemy
+            [81-84]  player stat stages Atk/Def/Spd/Spc, normalised (0=neutral)
+            [85-88]  enemy  stat stages Atk/Def/Spd/Spc, normalised (0=neutral)
+            [89]     threat ratio (enemy_dmg / lead_hp)
+            [90]     catchability estimate [0,1]
         "minimap" : uint8  (21, 21, 1)  — visited-tile binary grid centred on player
 
     Action space: Discrete(9)
@@ -345,6 +353,9 @@ class PokemonRedEnv(gymnasium.Env):
         self._prev_state: dict            = {}
         self._ep_reward:  float           = 0.0
         self._ep_breakdown: dict[str, float] = {}
+
+        # Respawn exploit guard (set on death, suppresses milestone reward on respawn map)
+        self._just_respawned: bool = False
 
         # Battle tracking
         self._in_battle_prev:   bool  = False
@@ -433,7 +444,6 @@ class PokemonRedEnv(gymnasium.Env):
         self._prev_party_xp          = []
         self._prev_party_level       = []
         self._battle_idle_steps      = 0
-        self._party_strengths        = [0.0] * 6
 
         self._prev_lead_hp           = 0
         self._nurse_prox_earned      = {}
@@ -441,6 +451,7 @@ class PokemonRedEnv(gymnasium.Env):
         self._prev_lead_hp_ratio     = 1.0
         self._visited_pokecenters    = set()
         self._pc_heal_cooldown       = {}
+        self._just_respawned         = False  # suppress milestone rewards after death
 
         self._prev_ball_count  = 0
         self._prev_pokedex     = frozenset()
@@ -454,10 +465,11 @@ class PokemonRedEnv(gymnasium.Env):
 
         self._record_action_override = -1
 
-        # Warm up frame stack with _FRAME_STACK idle ticks
+        # Warm up frame stack with _FRAME_STACK idle ticks.
+        # Always render so screen.image is populated (cheap with window="null").
         self._frames.clear()
         for _ in range(_FRAME_STACK):
-            self._pyboy.tick(1, (not self._headless) or self._render_in_headless)
+            self._pyboy.tick(1, True)
             self._frames.append(self._capture_frame())
 
         state = self._read_state()
@@ -552,16 +564,20 @@ class PokemonRedEnv(gymnasium.Env):
 
     def _do_action(self, action: int, effective_action: int) -> None:
         """Press the button for `action`, tick for play_frame_skip frames, release."""
-        render = (not self._headless) or self._render_in_headless
+        render_window = (not self._headless) or self._render_in_headless
+        n = self._play_frame_skip
         if action != 0:
             self._pyboy.send_input(_PRESS[action])
-        for _ in range(self._play_frame_skip):
-            self._pyboy.tick(1, render)
+        for i in range(n):
+            # Always render the last frame so screen.image is fresh for _capture_frame().
+            # With window="null" this is cheap (renders to an internal buffer, no display).
+            # Skipping render on intermediate frames keeps training fast.
+            self._pyboy.tick(1, render_window or (i == n - 1))
         if action != 0:
             self._pyboy.send_input(_RELEASE[action])
         # Extra idle frames for play / record mode (so animations are visible)
         for _ in range(self._display_frames):
-            self._pyboy.tick(1, render)
+            self._pyboy.tick(1, render_window)
 
     def _capture_frame(self) -> np.ndarray:
         """Return a (84, 84) uint8 grayscale frame."""
@@ -586,7 +602,7 @@ class PokemonRedEnv(gymnasium.Env):
     # ─────────────────────────────────────────────────────────────────────
 
     def _build_state_vec(self, state: dict) -> np.ndarray:
-        """Build the 69-dim float32 state vector."""
+        """Build the 91-dim float32 state vector (see class docstring for layout)."""
         vec = np.zeros(STATE_VEC_SIZE, dtype=np.float32)
 
         party    = state["party"]
@@ -868,9 +884,20 @@ class PokemonRedEnv(gymnasium.Env):
             self._visited_maps.add(map_id)
             reward += NEW_MAP_REWARD * explore_mult
             bd["new_map"]   = bd.get("new_map", 0.0) + NEW_MAP_REWARD * explore_mult
+            
+            # Milestone bonus for important exploration targets
+            # SKIP if we just respawned after death (prevents death→Viridian exploit)
+            if map_id in MILESTONE_MAPS and not self._just_respawned:
+                milestone_r = MILESTONE_MAPS[map_id]
+                reward += milestone_r
+                bd["milestone"] = bd.get("milestone", 0.0) + milestone_r
+            
+            # Clear respawn flag after visiting first new map
+            self._just_respawned = False
 
         # ── Northward distance reward ──────────────────────────────────────
-        # Only on pre-forest maps; stops once inside Viridian Forest / gates.
+        # Only on Pallet Town + Route 1 to establish initial northward push.
+        # Stops in Viridian City so exploration rewards guide from there.
         if map_id in _DISTANCE_ACTIVE_MAPS and map_id in MAP_GLOBAL_ORIGIN:
             gx = MAP_GLOBAL_ORIGIN[map_id][0] + player_x
             gy = MAP_GLOBAL_ORIGIN[map_id][1] + player_y
@@ -1070,6 +1097,7 @@ class PokemonRedEnv(gymnasium.Env):
                 death_r = DEATH_PENALTY * ratio_scale
                 reward += death_r
                 bd["death"] = bd.get("death", 0.0) + death_r
+                self._just_respawned = True  # will suppress milestone rewards on next map
             elif cur_lead_hp > 0:
                 # Win (or ran away)
                 prev_enemy = prev.get("enemy")

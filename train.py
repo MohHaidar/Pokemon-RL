@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import numpy as np
 
 import gymnasium as gym
 import torch
@@ -44,7 +45,7 @@ class PokemonCnnExtractor(BaseFeaturesExtractor):
 
     Processes the three observation keys separately then concatenates:
       - "screen"  (84×84×4 grayscale frame-stack)  → CNN   → 256-dim
-      - "state"   (53-dim float vector)             → Linear → 64-dim
+      - "state"   (91-dim float vector)             → Linear → 64-dim
       - "minimap" (21×21×1 visited-tile grid)       → CNN   → 64-dim
       Concatenated output: 384-dim
     """
@@ -155,10 +156,20 @@ def train(
 
     if resume and Path(resume).exists():
         print(f"[train] Resuming from {resume} ...")
+        # Scale batch_size with n_envs to keep ~48 minibatches per epoch
+        # buffer_size = n_steps × n_envs = 2048 × n_envs
+        # batch_size should divide evenly: 2048 × n_envs / batch_size ≈ 48
+        batch_size = max(256, (n_envs * 2048) // 48)
+        # Round to clean power-of-2-ish values
+        if batch_size > 256:
+            batch_size = 2 ** round(np.log2(batch_size))
+        print(f"[train] Adjusted batch_size={batch_size} for {n_envs} envs (buffer={n_envs*2048})")
+        
         model = RecurrentPPO.load(
             resume,
             env=vec_env,
             custom_objects={
+                "batch_size":    batch_size,
                 "ent_coef":      0.01,
                 "learning_rate": 1.0e-4,
                 "n_steps":       2048,

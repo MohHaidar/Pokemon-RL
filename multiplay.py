@@ -49,7 +49,7 @@ _WIN_H: int      =  800   # fixed window height
 _MAP_FRAC: float = 0.62   # world map panel fraction of total width
 _SCALE: float    =   4.0  # initial tile scale hint (auto-adjusted to fit panel)
 _PADDING: int    =  12    # inner padding for the map panel
-_STAT_H: int     =  36    # pixel height of stat text bar below each bot screen
+_STAT_H: int     =  48    # pixel height of stat text bar below each bot screen (increased for 3 lines)
 _SCREEN_NATIVE_W: int = 160
 _SCREEN_NATIVE_H: int = 144
 
@@ -379,17 +379,23 @@ def _render_screens(
 
         # ── Stat bar below screen ──────────────────────────────────────────
         sy = cy + screen_h + 2
-        map_name   = MAP_NAMES.get(s["map_id"], f"Map{s['map_id']}")
+        
+        map_name   = MAP_NAMES.get(s["map_id"], f"M{s['map_id']}")
+        # Shorten long map names
+        map_name = map_name.replace("Route", "R").replace("Viridian", "Virid").replace("Pokemon", "P")[:12]
         action_lbl = _ACTION_LABEL[s["last_action"]] if s["last_action"] < len(_ACTION_LABEL) else "?"
-        line1 = (
-            f"ep{s['episode']}  r:{s['ep_reward']:+.0f}  "
-            f"bdg:{s['badges']}  L{s['lead_level']}({s['party_size']})  "
-            f"{map_name}  [{action_lbl}]"
-        )
+        
+        # Line 1: compact stats
+        line1 = f"{s['episode']}  r{s['ep_reward']:+.0f}  b{s['badges']}  L{s['lead_level']}({s['party_size']})"
         t1 = font_sm.render(line1, True, col)
         surface.blit(t1, (cx, sy))
+        
+        # Line 2: map + action
+        line2 = f"{map_name} [{action_lbl}]"
+        t2_map = font_sm.render(line2, True, (180, 180, 180))
+        surface.blit(t2_map, (cx, sy + t1.get_height()))
 
-        # Reward events (second line, only non-quiet non-zero)
+        # Line 3: reward events (only non-quiet non-zero)
         bd     = s["reward_breakdown"]
         events = [
             f"{'+'if v>0 else ''}{v:.1f}{k[:4]}"
@@ -397,13 +403,15 @@ def _render_screens(
             if k not in _QUIET and abs(v) > 0.001
         ]
         if events:
-            t2 = font_sm.render("  ".join(events), True, (190, 190, 190))
-            surface.blit(t2, (cx, sy + t1.get_height() + 1))
+            # Limit to first 5 events to prevent overflow
+            events_str = "  ".join(events[:5])
+            t3 = font_sm.render(events_str, True, (190, 190, 190))
+            surface.blit(t3, (cx, sy + t1.get_height() + t2_map.get_height()))
 
-        # Error
+        # Error (line 4 if present)
         if s["error"]:
-            err = font_sm.render(f"ERR:{s['error'][:30]}", True, (255, 80, 80))
-            surface.blit(err, (cx, sy + t1.get_height() + 14))
+            err = font_sm.render(f"ERR:{s['error'][:25]}", True, (255, 80, 80))
+            surface.blit(err, (cx, sy + t1.get_height() + t2_map.get_height() + (t3.get_height() if events else 0)))
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

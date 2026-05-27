@@ -23,6 +23,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.3",
     "tensorboard>=2.16.0",
 ]
 
