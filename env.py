@@ -182,9 +182,11 @@ _BATTLE_MULT_START:  float = 1.0
 _BATTLE_MULT_END:    float = 2.5
 
 # ── Episode limits ─────────────────────────────────────────────────────────────
-MAX_STEPS:   int   = 8_192
-SCORE_FLOOR: float = -500.0
-STUCK_STEPS: int   = 500   # no new tiles in this many steps → episode ends
+MAX_STEPS:    int   = 8_192
+SCORE_FLOOR:  float = -500.0
+# Stuck reset removed: the stale-map penalty grows without bound and eventually
+# forces movement. A stuck reset let high-scoring episodes end early, locking
+# in a good return and teaching the bot that corner-camping = success.
 
 # ── Stale-map penalty ──────────────────────────────────────────────────────────
 STALE_MAP_MAX:     float = -0.12  # max penalty per step (reached when steps_on_map > onset + ramp; onset/ramp computed dynamically from map_area)
@@ -197,8 +199,59 @@ STALE_MAP_MAX:     float = -0.12  # max penalty per step (reached when steps_on_
 _status_mult = status_mult   # re-exported alias; play.py imports this from env
 
 # Gen 1 combat uncertainty constants (used in _combat_survivability)
-_GEN1_HIT_RATE  = 0.85    # ~85% of attacks land (avg accuracy + 1/256 auto-miss)
-_GEN1_CRIT_RATE = 0.0625  # ~6.25% base crit rate (Speed/512); crits deal 2×
+_GEN1_HIT_RATE     = 0.85    # ~85% of attacks land (avg accuracy + 1/256 auto-miss)
+_GEN1_CRIT_RATE    = 0.0625  # ~6.25% base crit rate (Speed/512); crits deal 2×
+_APPROX_BASE_POWER = 40      # average early-game physical move base power
+
+
+def _gen1_dmg_per_turn(
+    level: int, atk: int, atk_m: float, atk_status: int,
+    opp_def: int, opp_def_m: float,
+    opp_status: int, opp_max_hp: int,
+) -> float:
+    """
+    Approximate Gen 1 damage dealt to the opponent per turn (HP units).
+
+    Formula: ((2*level + 10) / 250) * (Atk * atk_m * offense_mult) / (Def * def_m) * BP + 2
+    Plus the opponent's passive status damage (BRN/PSN = 1/16 max_hp per turn).
+    """
+    offense    = atk * atk_m * status_offense_mult(atk_status)
+    defense    = max(opp_def * opp_def_m, 1.0)
+    level_mult = (2 * level + 10) / 250.0
+    dmg        = level_mult * offense / defense * _APPROX_BASE_POWER + 2.0
+    dmg       += status_passive_dmg(opp_status, opp_max_hp)
+    return max(dmg, 0.001)
+
+
+def _combat_survivability(
+    p_hp: int, p_dmg: float, p_spd_eff: float,
+    e_hp: int, e_dmg: float, e_spd_eff: float,
+) -> tuple[float, float, float]:
+    """
+    Returns (adj_turns_to_die, adj_turns_to_kill, surv_ratio).
+
+    p_dmg / e_dmg — pre-computed HP-per-turn damage from _gen1_dmg_per_turn().
+    surv_ratio = adj_ttd / adj_ttk  →  >1 player wins, <1 player loses.
+
+    Conservative adjustments:
+      1. Miss rate  — player misses ~15% → ttk / HIT_RATE (longer to kill)
+      2. Crit risk  — enemy crits ~6.25% (2× dmg) → ttd / (1 + CRIT_RATE)
+      3. Turn order — faster side gets a free first hit each exchange:
+           enemy faster  → subtract 1 from ttd  (absorb a hit before acting)
+           player faster → subtract 1 from ttk  (only if ttk > 1)
+    """
+    ttk = e_hp / p_dmg
+    ttd = p_hp / e_dmg
+
+    adj_ttk = ttk / _GEN1_HIT_RATE
+    adj_ttd = ttd / (1.0 + _GEN1_CRIT_RATE)
+
+    if e_spd_eff > p_spd_eff:
+        adj_ttd = max(adj_ttd - 1.0, 0.001)
+    elif p_spd_eff > e_spd_eff and adj_ttk > 1.0:
+        adj_ttk = max(adj_ttk - 1.0, 0.001)
+
+    return adj_ttd, adj_ttk, adj_ttd / max(adj_ttk, 0.001)
 
 
 def _pokemon_strength(
@@ -211,56 +264,6 @@ def _pokemon_strength(
     Uses level² * hp²  so both level and remaining HP contribute quadratically.
     """
     return (level ** 2) * max(hp_ratio, 0.01) ** 2 * _status_mult(status) * atk_stage_mult / max(def_stage_mult, 0.01)
-
-
-def _combat_survivability(
-    p_hp: int, p_max_hp: int, p_atk: int, p_def: int, p_spd: int, p_status: int,
-    p_atk_m: float, p_def_m: float, p_spd_m: float,
-    e_hp: int, e_max_hp: int, e_atk: int, e_def: int, e_spd: int, e_status: int,
-    e_atk_m: float, e_def_m: float, e_spd_m: float,
-) -> tuple[float, float, float]:
-    """
-    Returns (adj_turns_to_die, adj_turns_to_kill, surv_ratio).
-
-    surv_ratio = adj_ttd / adj_ttk  →  >1 player wins, <1 player loses.
-
-    Conservative adjustments applied:
-      1. Miss rate   — player misses ~15% of turns → ttk / HIT_RATE (takes longer to kill)
-      2. Crit risk   — enemy crits ~6.25% of turns (2× dmg) → ttd / (1 + CRIT_RATE)
-      3. Turn order  — faster side gets a free first hit:
-           enemy faster  → subtract 1 turn from ttd  (take a hit before you can act)
-           player faster → subtract 1 turn from ttk  (only if ttk > 1, i.e. can't already one-shot)
-    
-    NOTE: This is a rough approximation. Without knowing actual move base power,
-    we assume average ~40 BP. Real damage varies ±50% depending on move choice.
-    """
-    # Stat-ratio component (used for relative strength even without exact damage)
-    p_stat_ratio = (p_atk * p_atk_m * status_offense_mult(p_status)) / max(e_def * e_def_m, 1)
-    e_stat_ratio = (e_atk * e_atk_m * status_offense_mult(e_status)) / max(p_def * p_def_m, 1)
-    p_self = status_passive_dmg(p_status, p_max_hp)
-    e_self = status_passive_dmg(e_status, e_max_hp)
-
-    # For ttd/ttk, we just use stat ratios (relative, not absolute HP values)
-    # This keeps the surv_ratio meaningful without needing exact damage
-    ttk = e_hp / max(p_stat_ratio + e_self, 0.001)
-    ttd = p_hp / max(e_stat_ratio + p_self, 0.001)
-
-    # Miss uncertainty → kills take longer
-    adj_ttk = ttk / _GEN1_HIT_RATE
-    # Crit risk → deaths come sooner
-    adj_ttd = ttd / (1.0 + _GEN1_CRIT_RATE)
-
-    # Turn order: faster side gets a free first hit each battle
-    p_spd_eff = p_spd * p_spd_m
-    e_spd_eff = e_spd * e_spd_m
-    if e_spd_eff > p_spd_eff:
-        # Enemy moves first → player absorbs a hit before attacking
-        adj_ttd = max(adj_ttd - 1.0, 0.001)
-    elif p_spd_eff > e_spd_eff and adj_ttk > 1.0:
-        # Player moves first AND can't one-shot → gains one free hit
-        adj_ttk = max(adj_ttk - 1.0, 0.001)
-
-    return adj_ttd, adj_ttk, adj_ttd / max(adj_ttk, 0.001)
 
 
 def _hash_bit_diff(a: int, b: int) -> int:
@@ -523,8 +526,6 @@ class PokemonRedEnv(gymnasium.Env):
             truncated = True
         if self._ep_reward < SCORE_FLOOR:
             truncated = True
-        if self._stale_steps >= STUCK_STEPS:
-            truncated = True
 
         obs  = self._obs(state)
         info = {
@@ -675,7 +676,7 @@ class PokemonRedEnv(gymnasium.Env):
         vec[32] = float(np.clip(self._live_strength_ratio  / 5.0, 0.0, 1.0))
         vec[33] = float(np.clip(self._battle_start_strength / 5.0, 0.0, 1.0))
         vec[34] = len(self._visited_maps) / 17.0
-        vec[35] = min(self._stale_steps / STUCK_STEPS, 1.0)
+        vec[35] = min(self._stale_steps / MAX_STEPS, 1.0)
 
         # ── Indices 36-56 (from session notes) ───────────────────────────
         vec[36] = float(items.get("cut",      False))  # HM01 Cut
@@ -721,10 +722,16 @@ class PokemonRedEnv(gymnasium.Env):
                 else:
                     p_atk_m = p_def_m = p_spd_m = 1.0   # stages reset on switch-in
                 ttd_i, ttk_i, surv_i = _combat_survivability(
-                    p["hp"], p["max_hp"], p["atk_stat"], p["def_stat"], p["spd_stat"],
-                    p["status"], p_atk_m, p_def_m, p_spd_m,
-                    enemy["hp"], enemy["max_hp"], enemy["atk_stat"], enemy["def_stat"],
-                    enemy["spd_stat"], enemy["status"], e_atk_m, e_def_m, e_spd_m,
+                    p["hp"],
+                    _gen1_dmg_per_turn(p["level"], p["atk_stat"], p_atk_m, p["status"],
+                                       enemy["def_stat"], e_def_m,
+                                       enemy["status"], enemy["max_hp"]),
+                    p["spd_stat"] * p_spd_m,
+                    enemy["hp"],
+                    _gen1_dmg_per_turn(enemy["level"], enemy["atk_stat"], e_atk_m, enemy["status"],
+                                       p["def_stat"], p_def_m,
+                                       p["status"], p["max_hp"]),
+                    enemy["spd_stat"] * e_spd_m,
                 )
                 denom     = max(p["spd_stat"] * p_spd_m + enemy["spd_stat"] * e_spd_m, 1.0)
                 spd_adv_i = (p["spd_stat"] * p_spd_m - enemy["spd_stat"] * e_spd_m) / denom
@@ -891,9 +898,12 @@ class PokemonRedEnv(gymnasium.Env):
                 milestone_r = MILESTONE_MAPS[map_id]
                 reward += milestone_r
                 bd["milestone"] = bd.get("milestone", 0.0) + milestone_r
-            
-            # Clear respawn flag after visiting first new map
-            self._just_respawned = False
+
+            # Clear respawn flag only when we've reached a new non-PC map.
+            # Keeping it set while inside the spawn PC ensures PC rewards
+            # (heal, proximity, arrive) are also suppressed on the same step.
+            if map_id not in POKECENTER_MAPS:
+                self._just_respawned = False
 
         # ── Northward distance reward ──────────────────────────────────────
         # Only on Pallet Town + Route 1 to establish initial northward push.
@@ -1023,11 +1033,17 @@ class PokemonRedEnv(gymnasium.Env):
             lead_spd = lead["spd_stat"] if lead else 10
             lead_hp  = lead["hp"]       if lead else 5
             lead_mhp = lead["max_hp"]   if lead else 10
+            lead_lvl = lead["level"]    if lead else 5
             lead_st  = lead["status"]   if lead else 0
             _, _, self._battle_start_strength = _combat_survivability(
-                lead_hp, lead_mhp, lead_atk, lead_def, lead_spd, lead_st, 1.0, 1.0, 1.0,
-                enemy["hp"], enemy["max_hp"], enemy["atk_stat"], enemy["def_stat"],
-                enemy["spd_stat"], enemy["status"], 1.0, 1.0, 1.0,
+                lead_hp,
+                _gen1_dmg_per_turn(lead_lvl, lead_atk, 1.0, lead_st,
+                                   enemy["def_stat"], 1.0, enemy["status"], enemy["max_hp"]),
+                lead_spd * 1.0,
+                enemy["hp"],
+                _gen1_dmg_per_turn(enemy["level"], enemy["atk_stat"], 1.0, enemy["status"],
+                                   lead_def, 1.0, lead_st, lead_mhp),
+                enemy["spd_stat"] * 1.0,
             )
             self._is_trainer_battle    = is_trainer_battle(state)
             self._live_strength_ratio  = self._battle_start_strength
@@ -1046,10 +1062,14 @@ class PokemonRedEnv(gymnasium.Env):
             e_def_m = _STAGE_MULT[max(0, min(12, es.get("def", _NEUTRAL_STAGE) - 1))]
             e_spd_m = _STAGE_MULT[max(0, min(12, es.get("spd", _NEUTRAL_STAGE) - 1))]
             _, _, self._live_strength_ratio = _combat_survivability(
-                lead["hp"], lead["max_hp"], lead["atk_stat"], lead["def_stat"],
-                lead["spd_stat"], lead["status"], p_atk_m, p_def_m, p_spd_m,
-                enemy["hp"], enemy["max_hp"], enemy["atk_stat"], enemy["def_stat"],
-                enemy["spd_stat"], enemy["status"], e_atk_m, e_def_m, e_spd_m,
+                lead["hp"],
+                _gen1_dmg_per_turn(lead["level"], lead["atk_stat"], p_atk_m, lead["status"],
+                                   enemy["def_stat"], e_def_m, enemy["status"], enemy["max_hp"]),
+                lead["spd_stat"] * p_spd_m,
+                enemy["hp"],
+                _gen1_dmg_per_turn(enemy["level"], enemy["atk_stat"], e_atk_m, enemy["status"],
+                                   lead["def_stat"], p_def_m, lead["status"], lead["max_hp"]),
+                enemy["spd_stat"] * e_spd_m,
             )
 
             # Damage reward (HP dealt to enemy this step)
@@ -1141,18 +1161,27 @@ class PokemonRedEnv(gymnasium.Env):
             lead_hp_r = get_lead_hp_ratio(state)
 
             # One-shot first-visit bonus (any HP — reward for finding the pokecenter)
+            # Suppressed on death-respawn: blackout always lands in a PC, so
+            # this would otherwise reward dying as a fast-travel mechanic.
             if map_id not in self._visited_pokecenters:
                 self._visited_pokecenters.add(map_id)
-                reward += 3.0
-                bd["pokecenter_visit"] = bd.get("pokecenter_visit", 0.0) + 3.0
+                if not self._just_respawned:
+                    reward += 3.0
+                    bd["pokecenter_visit"] = bd.get("pokecenter_visit", 0.0) + 3.0
 
-            # One-shot arrive bonus (first time entering THIS visit with low HP < 25%)
+            # One-shot arrive bonus (first time entering THIS visit with low HP < 25%).
+            # Not suppressed on respawn — HP is auto-restored on death so lead_hp_r
+            # will be ~1.0 and this naturally won't fire. Kept active so the bot is
+            # still rewarded for legitimately entering a PC at low HP.
             if not prev.get("map_id") in POKECENTER_MAPS and lead_hp_r < 0.25:
                 reward += POKECENTER_ARRIVE
                 bd["pokecenter_arrive"] = bd.get("pokecenter_arrive", 0.0) + POKECENTER_ARRIVE
                 self._entered_pc_this_visit = True
 
-            # Proximity reward (only when HP < threshold, caps per visit)
+            # Proximity reward (only when HP < threshold, caps per visit).
+            # Not suppressed on respawn — HP is full after death so this naturally
+            # won't fire. Kept active so low-HP bot is rewarded for walking to
+            # Nurse Joy (important for PP recovery motivation).
             nurse_dist = abs(player_x - nurse_pos[0]) + abs(player_y - nurse_pos[1])
             if lead_hp_r < LOW_HP_THRESHOLD and nurse_dist > 0:
                 prox     = max(0.0, 1.0 - nurse_dist / 12.0) * NURSE_PROXIMITY_MAX
@@ -1164,13 +1193,17 @@ class PokemonRedEnv(gymnasium.Env):
                     bd["nurse_prox"] = bd.get("nurse_prox", 0.0) + prox_r
                     self._nurse_prox_earned[map_id] = earned + prox_r
 
-            # Full-heal detection: any HP increase to 100% while in PC
+            # Full-heal detection: any HP increase to 100% while in PC.
             # Cooldown of 150 steps prevents animation-glitch double-fires.
+            # SUPPRESSED on death-respawn: the game heals the party automatically
+            # on blackout — rewarding this would make dying a profitable heal shortcut.
             if prev_lead and lead:
                 prev_hr = prev_lead["hp"] / max(prev_lead["max_hp"], 1)
                 cur_hr  = lead["hp"] / max(lead["max_hp"], 1)
                 last_heal = self._pc_heal_cooldown.get(map_id, -999)
-                if prev_hr < 1.0 and cur_hr == 1.0 and (self._steps - last_heal) > 150:
+                if (prev_hr < 1.0 and cur_hr == 1.0
+                        and (self._steps - last_heal) > 150
+                        and not self._just_respawned):
                     reward += POKECENTER_HEAL
                     bd["pokecenter_heal"] = bd.get("pokecenter_heal", 0.0) + POKECENTER_HEAL
                     self._nurse_prox_earned[map_id] = 0.0

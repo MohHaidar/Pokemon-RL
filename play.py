@@ -288,23 +288,16 @@ def play(
             e_def_m  = _stage_mult_of(es.get("def", _NEUTRAL_STAGE))
             e_spd_m  = _stage_mult_of(es.get("spd", _NEUTRAL_STAGE))
             lead     = party[0]
-            from ram_map import status_offense_mult, status_passive_dmg
-            # Approximate Gen 1 damage: ((2*Level+10)/250) * (Atk/Def) * BasePower + 2
-            # Assume average BasePower ≈ 40 for early-game physical moves
-            APPROX_BASE_POWER = 40
-            level_mult_p = (2 * lead["level"] + 10) / 250.0
-            level_mult_e = (2 * enemy["level"] + 10) / 250.0
-            p_dmg_turn = (level_mult_p * lead["atk_stat"] * p_atk_m * status_offense_mult(lead.get("status", 0))
-                          / max(enemy["def_stat"] * e_def_m, 1) * APPROX_BASE_POWER + 2
-                          + status_passive_dmg(enemy.get("status", 0), enemy["max_hp"]))
-            e_dmg_turn = (level_mult_e * enemy["atk_stat"] * e_atk_m * status_offense_mult(enemy.get("status", 0))
-                          / max(lead["def_stat"] * p_def_m, 1) * APPROX_BASE_POWER + 2
-                          + status_passive_dmg(lead.get("status", 0), lead["max_hp"]))
+            from env import _gen1_dmg_per_turn, _combat_survivability
+            p_dmg_turn = _gen1_dmg_per_turn(
+                lead["level"], lead["atk_stat"], p_atk_m, lead.get("status", 0),
+                enemy["def_stat"], e_def_m, enemy.get("status", 0), enemy["max_hp"])
+            e_dmg_turn = _gen1_dmg_per_turn(
+                enemy["level"], enemy["atk_stat"], e_atk_m, enemy.get("status", 0),
+                lead["def_stat"], p_def_m, lead.get("status", 0), lead["max_hp"])
             ttd, ttk, surv = _combat_survivability(
-                lead["hp"],  lead["max_hp"],  lead["atk_stat"],  lead["def_stat"],
-                lead.get("spd_stat", 10),  lead.get("status", 0),  p_atk_m, p_def_m, p_spd_m,
-                enemy["hp"], enemy["max_hp"], enemy["atk_stat"], enemy["def_stat"],
-                enemy.get("spd_stat", 10), enemy.get("status", 0), e_atk_m, e_def_m, e_spd_m,
+                lead["hp"],  p_dmg_turn, lead.get("spd_stat", 10)  * p_spd_m,
+                enemy["hp"], e_dmg_turn, enemy.get("spd_stat", 10) * e_spd_m,
             )
             hp_ratio = lead["hp"] / max(lead["max_hp"], 1)
             # Adjust verdict when at critical HP — even "even" fights are dangerous

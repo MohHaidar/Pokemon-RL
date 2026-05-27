@@ -14,7 +14,7 @@ from env import (
     NEW_TILE_REWARD, NEW_MAP_REWARD, DEATH_PENALTY,
     LEVEL_UP_REWARD, BADGE_REWARD,
     MILESTONE_MAPS,
-    MAX_STEPS, STUCK_STEPS,
+    MAX_STEPS,
     SCORE_FLOOR,
     _DISTANCE_ACTIVE_MAPS, _DISTANCE_ORIGIN,
 )
@@ -74,11 +74,6 @@ def test_milestone_map_rewards_positive():
 
 def test_score_floor_is_negative():
     assert SCORE_FLOOR < 0
-
-
-def test_stuck_steps_less_than_max_steps():
-    """STUCK_STEPS must be < MAX_STEPS so the stuck timeout fires first."""
-    assert STUCK_STEPS < MAX_STEPS
 
 
 # ── Distance reward config ───────────────────────────────────────────────────

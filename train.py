@@ -44,10 +44,10 @@ class PokemonCnnExtractor(BaseFeaturesExtractor):
     Custom feature extractor for the Pokemon Red environment.
 
     Processes the three observation keys separately then concatenates:
-      - "screen"  (84×84×4 grayscale frame-stack)  → CNN   → 256-dim
-      - "state"   (91-dim float vector)             → Linear → 64-dim
-      - "minimap" (21×21×1 visited-tile grid)       → CNN   → 64-dim
-      Concatenated output: 384-dim
+      - "screen"  (84×84×4 grayscale frame-stack)  → CNN        → 256-dim
+      - "state"   (91-dim float vector)             → MLP(2-layer) → 64-dim
+      - "minimap" (21×21×1 visited-tile grid)       → CNN        → 64-dim
+      Concatenated output: 384-dim → 2-layer LSTM(256)
     """
 
     CNN_OUT     = 256
@@ -79,7 +79,9 @@ class PokemonCnnExtractor(BaseFeaturesExtractor):
 
         state_dim = observation_space["state"].shape[0]
         self.state_net = nn.Sequential(
-            nn.Linear(state_dim, self.STATE_OUT),
+            nn.Linear(state_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.STATE_OUT),
             nn.ReLU(),
         )
 
@@ -202,7 +204,7 @@ def train(
                 features_extractor_class  = PokemonCnnExtractor,
                 features_extractor_kwargs = {},
                 lstm_hidden_size          = 256,
-                n_lstm_layers             = 1,
+                n_lstm_layers             = 2,
                 shared_lstm               = False,
             ),
         )
