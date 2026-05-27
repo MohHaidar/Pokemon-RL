@@ -4,3 +4,4 @@ recordings/*
 runs/*
 .python-version
 Pokemon_Red*
+tests/__pycache__/*
