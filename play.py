@@ -73,12 +73,13 @@ def evaluate(
     model_path: str,
     rom_path: str = "Pokemon_Red.gb",
     n_episodes: int = 10,
+    max_steps: int = 8_192,
 ) -> None:
     """Run N headless episodes and report true mean/min/max reward."""
     if not Path(model_path).exists():
         sys.exit(f"[eval] Model not found: {model_path}")
 
-    env   = PokemonRedEnv(rom_path=rom_path, headless=True)
+    env   = PokemonRedEnv(rom_path=rom_path, headless=True, max_steps=max_steps)
     model = RecurrentPPO.load(model_path)
 
     print(f"[eval] Evaluating {n_episodes} episodes (headless)...")
@@ -116,11 +117,12 @@ def evaluate(
 
 
 def play(
-    model_path: str,
-    rom_path: str = "Pokemon_Red.gb",
-    state_path: str | None = None,
-    speed: int = 1,
+    model_path:     str,
+    rom_path:       str = "Pokemon_Red.gb",
+    state_path:     str | None = None,
+    speed:          int = 1,
     display_frames: int = 8,
+    max_steps:      int = 8_192,
 ) -> None:
     """Watch the agent play using the native PyBoy SDL2 window.
 
@@ -140,6 +142,7 @@ def play(
         headless        = False,
         emulation_speed = speed,
         display_frames  = display_frames,
+        max_steps       = max_steps,
     )
 
     print(f"[play] Loading model from {model_path}...")
@@ -368,10 +371,13 @@ if __name__ == "__main__":
                              "(default: 8; increase if text disappears too fast)")
     parser.add_argument("--eval",  type=int, default=0,
                         help="Run N headless evaluation episodes instead of watching")
+    parser.add_argument("--max-steps", type=int, default=8_192,
+                        help="Episode length cap (default: 8192)")
     args = parser.parse_args()
 
     if args.eval > 0:
-        evaluate(model_path=args.model, rom_path=args.rom, n_episodes=args.eval)
+        evaluate(model_path=args.model, rom_path=args.rom, n_episodes=args.eval,
+                 max_steps=args.max_steps)
     else:
         play(
             model_path     = args.model,
@@ -379,5 +385,6 @@ if __name__ == "__main__":
             state_path     = args.state,
             speed          = args.speed,
             display_frames = args.display,
+            max_steps      = args.max_steps,
         )
 

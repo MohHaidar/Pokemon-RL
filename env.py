@@ -105,7 +105,7 @@ LOW_HP_THRESHOLD:      float = 0.40   # below this → low_hp step penalty
 NURSE_JOY_POS: dict[int, tuple[int, int]] = {
     m: (7, 4) for m in POKECENTER_MAPS
 }  # nurse tile position is the same in all PCs
-NURSE_PROXIMITY_MAX: float = 0.40   # max prox reward per step (cancels -0.2 low_hp)
+NURSE_PROXIMITY_MAX: float = 0.40   # max prox reward per step (partially offsets low_hp penalty)
 NURSE_PROXIMITY_CAP: float = 15.0   # total budget per PC visit before farming prevention
 
 # ── Battle reward constants ────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ DAMAGE_REWARD:  float = 0.7    # per HP dealt × battle_mult × ratio_scale
 WIN_BONUS:      float = 15.0   # × battle_mult × start_ratio_scale
 DEATH_PENALTY:  float = -80.0  # × inverse_ratio_scale  (also used as blackout penalty)
 BLACKOUT_PENALTY: float = -80.0
-RUN_WILD_REWARD:  float = 5.0  # for running from a wild battle when ratio > 1.2
+RUN_WILD_REWARD:  float = 20.0  # for running from a wild battle at low/critical HP
 RUN_PENALTY:      float = -15.0  # for running when ratio < 0.7 (fleeing when strong)
 
 # ── Explore reward constants ──────────────────────────────────────────────────
@@ -149,7 +149,9 @@ BATTLE_IDLE_PENALTY: float = -0.01
 BATTLE_IDLE_GRACE:   int   = 60    # steps before idle penalty starts (allows animation + menu nav)
 
 # ── Low-HP penalty ────────────────────────────────────────────────────────────
-LOW_HP_PENALTY:      float = -0.2   # per step when lead HP < LOW_HP_THRESHOLD
+LOW_HP_PENALTY:              float = -0.8   # per step when lead HP < LOW_HP_THRESHOLD (outside battle)
+WILD_CRITICAL_BATTLE_PENALTY: float = -1.5  # per step in wild battle when HP < CRITICAL_HP_THRESHOLD
+                                             # NOT applied to trainer battles — can't run from those
 
 # ── Catch / ball rewards ──────────────────────────────────────────────────────
 BALL_BUY_REWARD:     float = 10.0   # per ball purchased
@@ -171,6 +173,8 @@ MILESTONE_MAPS: dict[int, float] = {
     33: 10.0,   # Route 22 (west exploration from Viridian)
     50: 15.0,   # Viridian Forest S Gate (north from Viridian)
     51: 20.0,   # Viridian Forest (inside the forest)
+    47: 30.0,   # Viridian Forest N Gate (exiting forest northward)
+    2: 100.0,   # Pewter City (past the forest — big milestone)
 }
 
 # ── Phase multipliers ─────────────────────────────────────────────────────────
@@ -1154,6 +1158,12 @@ class PokemonRedEnv(gymnasium.Env):
             if lead_hp_r < LOW_HP_THRESHOLD and not in_battle:
                 reward += LOW_HP_PENALTY
                 bd["low_hp"] = bd.get("low_hp", 0.0) + LOW_HP_PENALTY
+            elif (in_battle and not self._is_trainer_battle
+                  and lead_hp_r < CRITICAL_HP_THRESHOLD):
+                # Wild battle at critical HP — penalise each step to create
+                # urgency to run. Trainer battles are excluded: can't flee.
+                reward += WILD_CRITICAL_BATTLE_PENALTY
+                bd["critical_hp"] = bd.get("critical_hp", 0.0) + WILD_CRITICAL_BATTLE_PENALTY
 
         # ── Pokecenter rewards ────────────────────────────────────────────
         in_pc     = is_in_pokecenter(state)

@@ -159,8 +159,10 @@ def save_trajectory(traj: list, save_dir: str, episode: int) -> str:
 
 # ── Main recording loop ───────────────────────────────────────────────────────
 
-def run(save_dir: str = "recordings", max_episodes: int | None = None, speed: int = 1):
-    env = PokemonRedEnv(headless=False, emulation_speed=speed, play_frame_skip=16)
+def run(save_dir: str = "recordings", max_episodes: int | None = None, speed: int = 1,
+        max_steps: int = 8_192):
+    env = PokemonRedEnv(headless=False, emulation_speed=speed, play_frame_skip=16,
+                        max_steps=max_steps)
 
     # Start keyboard listener (background thread, no window focus needed)
     listener = pynput_kb.Listener(on_press=_on_press, on_release=_on_release, suppress=False)
@@ -269,5 +271,8 @@ if __name__ == "__main__":
                     help="Stop after N episodes (default: run until window is closed)")
     ap.add_argument("--speed",     type=int, default=1, metavar="N",
                     help="Emulation speed: 1=real-time (default), 2=2x, 0=unlimited")
+    ap.add_argument("--max-steps", type=int, default=8_192,
+                    help="Episode length cap (default: 8192)")
     args = ap.parse_args()
-    run(save_dir=args.save_dir, max_episodes=args.episodes, speed=args.speed)
+    run(save_dir=args.save_dir, max_episodes=args.episodes, speed=args.speed,
+        max_steps=args.max_steps)

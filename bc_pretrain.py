@@ -144,7 +144,7 @@ def bc_train(
                 features_extractor_class  = PokemonCnnExtractor,
                 features_extractor_kwargs = {},
                 lstm_hidden_size          = 256,
-                n_lstm_layers             = 1,
+                n_lstm_layers             = 2,
                 shared_lstm               = False,
             ),
         )

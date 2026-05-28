@@ -130,6 +130,7 @@ class BotThread(threading.Thread):
         rom_path: str,
         speed: int = 0,
         state_path: str | None = None,
+        max_steps: int = 8_192,
     ) -> None:
         super().__init__(daemon=True)
         self.bot_id     = bot_id
@@ -137,6 +138,7 @@ class BotThread(threading.Thread):
         self.rom_path   = rom_path
         self.speed      = speed
         self.state_path = state_path
+        self.max_steps  = max_steps
 
         # ── Shared state (read by main thread) ────────────────────────────
         self.map_id:           int                   = 12
@@ -187,6 +189,7 @@ class BotThread(threading.Thread):
             headless=True,
             render_in_headless=True,
             emulation_speed=self.speed,
+            max_steps=self.max_steps,
         )
         model = RecurrentPPO.load(self.model_path)
         _obs_keys = set(model.observation_space.spaces.keys())
@@ -422,6 +425,7 @@ def run(
     n_bots:     int           = 4,
     speed:      int           = 0,
     state_path: str | None    = None,
+    max_steps:  int           = 8_192,
 ) -> None:
     if not Path(model_path).exists():
         sys.exit(f"[multiplay] Model not found: {model_path}")
@@ -471,7 +475,7 @@ def run(
           f"grid={n_cols}×{n_rows}  screen={screen_w}×{screen_h}...")
     bots: list[BotThread] = []
     for i in range(n_bots):
-        bt = BotThread(i, model_path, rom_path, speed, state_path)
+        bt = BotThread(i, model_path, rom_path, speed, state_path, max_steps)
         bt.start()
         bots.append(bt)
         time.sleep(0.3)
@@ -570,6 +574,8 @@ if __name__ == "__main__":
     parser.add_argument("--n",      type=int, default=4,   help="Number of bots (default: 4)")
     parser.add_argument("--speed",  type=int, default=0,   help="Emulation speed 0=unlimited")
     parser.add_argument("--state",  default=None,          help="Optional .state file for all bots")
+    parser.add_argument("--max-steps", type=int, default=8_192,
+                        help="Episode length cap (default: 8192)")
     args = parser.parse_args()
 
     run(
@@ -578,4 +584,5 @@ if __name__ == "__main__":
         n_bots     = args.n,
         speed      = args.speed,
         state_path = args.state,
+        max_steps  = args.max_steps,
     )
