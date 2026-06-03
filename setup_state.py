@@ -121,9 +121,9 @@ def _battle_str(m) -> str:
     p_spd_eff = p_spd * p_spd_m
     e_spd_eff = e_spd * e_spd_m
     if e_spd_eff > p_spd_eff:
-        adj_ttd = max(adj_ttd - 1.0, 0.001)
-    elif p_spd_eff > e_spd_eff and adj_ttk > 1.0:
-        adj_ttk = max(adj_ttk - 1.0, 0.001)
+        adj_ttd = max(adj_ttd - 1.0, 0.001)   # enemy goes first → player eats extra hit
+    elif p_spd_eff > e_spd_eff:
+        adj_ttd = adj_ttd + 1.0                # player goes first → enemy misses final-turn attack
     surv    = adj_ttd / max(adj_ttk, 0.001)
     if   surv < 0.5:  verdict = "🚨 OUTMATCHED — RUN"
     elif surv < 0.83: verdict = "⚠ OUTMATCHED"

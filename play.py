@@ -20,8 +20,7 @@ from pathlib import Path
 from sb3_contrib import RecurrentPPO
 
 from env import (
-    PokemonRedEnv, CRITICAL_HP_THRESHOLD, LOW_HP_THRESHOLD,
-    _pokemon_strength, _status_mult, _combat_survivability,
+    PokemonRedEnv, LOW_HP_THRESHOLD,
 )
 from ram_map import POKECENTER_MAPS, STAGE_MULT as _STAGE_MULT, NEUTRAL_STAGE as _NEUTRAL_STAGE
 
@@ -146,7 +145,7 @@ def play(
     )
 
     print(f"[play] Loading model from {model_path}...")
-    model = RecurrentPPO.load(model_path)
+    model = RecurrentPPO.load(model_path, n_envs=1, device="cpu")
 
     # Compatibility: older checkpoints may not include 'minimap'.
     _model_obs_keys = set(model.observation_space.spaces.keys())
@@ -202,7 +201,7 @@ def play(
         # ── Accumulate debug stats ────────────────────────────────────────
         ep_low_hp      += bd.get("low_hp",          0.0)
         ep_crit_battle += bd.get("critical_battle",  0.0)
-        ep_nurse_prox  += bd.get("nurse_prox",       0.0)
+        ep_nurse_prox  += bd.get("nurse_nav",        0.0)
         if "pokecenter_heal" in bd:
             steps_since_heal = 0
         else:
@@ -226,7 +225,7 @@ def play(
             e_ratio = enemy["hp"] / max(enemy["max_hp"], 1)
             enemy_str = f" vs#{enemy['species']}({e_ratio:.0%})"
 
-        _QUIET = {"critical_battle", "low_hp", "nurse_prox"}
+        _QUIET = {"critical_battle", "low_hp", "nurse_nav"}
         events = [
             f"{'+' if v > 0 else ''}{v:.1f} {k}"
             for k, v in bd.items() if k not in _QUIET
@@ -249,10 +248,10 @@ def play(
             hp_ratio = hp_now / max(hp_max, 1)
             bar_full = int(hp_ratio * 10)
             hp_bar   = "█" * bar_full + "░" * (10 - bar_full)
-            if hp_ratio < CRITICAL_HP_THRESHOLD:
-                hp_tag = " ⚠CRIT"
-            elif hp_ratio < LOW_HP_THRESHOLD:
-                hp_tag = " LOW"
+            if hp_ratio < LOW_HP_THRESHOLD:
+                hp_tag = " ⚠LOW"
+            elif hp_ratio < 0.50:
+                hp_tag = " low"
             else:
                 hp_tag = ""
             hp_str = f"HP [{hp_bar}]{hp_now}/{hp_max}({hp_ratio:.0%}){hp_tag}"
@@ -263,7 +262,7 @@ def play(
         pc_tag   = " [IN-PC]" if in_pc else ""
         heal_tag = f"  heal_in:{steps_since_heal}s" if steps_since_heal < 9999 else ""
 
-        nurse_now = bd.get("nurse_prox", 0.0)
+        nurse_now = bd.get("nurse_nav", 0.0)
         nurse_str = f"  prox:{nurse_now:+.2f}" if in_pc else ""
 
         dex_count = len(state.get("pokedex_owned", set()))
@@ -291,21 +290,21 @@ def play(
             e_def_m  = _stage_mult_of(es.get("def", _NEUTRAL_STAGE))
             e_spd_m  = _stage_mult_of(es.get("spd", _NEUTRAL_STAGE))
             lead     = party[0]
-            from env import _gen1_dmg_per_turn, _combat_survivability
-            p_dmg_turn = _gen1_dmg_per_turn(
+            from env import gen1_dmg_per_turn, combat_survivability
+            p_dmg_turn = gen1_dmg_per_turn(
                 lead["level"], lead["atk_stat"], p_atk_m, lead.get("status", 0),
                 enemy["def_stat"], e_def_m, enemy.get("status", 0), enemy["max_hp"])
-            e_dmg_turn = _gen1_dmg_per_turn(
+            e_dmg_turn = gen1_dmg_per_turn(
                 enemy["level"], enemy["atk_stat"], e_atk_m, enemy.get("status", 0),
                 lead["def_stat"], p_def_m, lead.get("status", 0), lead["max_hp"])
-            ttd, ttk, surv = _combat_survivability(
+            ttd, ttk, surv = combat_survivability(
                 lead["hp"],  p_dmg_turn, lead.get("spd_stat", 10)  * p_spd_m,
                 enemy["hp"], e_dmg_turn, enemy.get("spd_stat", 10) * e_spd_m,
             )
             hp_ratio = lead["hp"] / max(lead["max_hp"], 1)
             # Adjust verdict when at critical HP — even "even" fights are dangerous
-            if hp_ratio < CRITICAL_HP_THRESHOLD:
-                verdict = "🚨 CRITICAL HP — RUN"
+            if hp_ratio < LOW_HP_THRESHOLD:
+                verdict = "🚨 LOW HP — RUN"
             elif surv < 0.5:
                 verdict = "🚨 OUTMATCHED — RUN"
             elif surv < 0.83:

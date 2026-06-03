@@ -31,6 +31,7 @@ from ram_map import (
     OFF_PP_0, OFF_PP_1, OFF_PP_2, OFF_PP_3,
     OFF_ATK_HI, OFF_ATK_LO, OFF_DEF_HI, OFF_DEF_LO, OFF_SPD_HI, OFF_SPD_LO,
     BALL_ITEM_IDS, HEAL_ITEM_IDS, HM_ITEM_IDS,
+    status_mult, status_offense_mult, status_passive_dmg,
 )
 
 _STAT_KEYS: tuple[str, ...] = ("atk", "def", "spd", "spc", "acc", "eva")
@@ -304,3 +305,90 @@ def enemy_stat_lowered(cur_stages: dict[str, int], prev_stages: dict[str, int]) 
         cur_stages.get(k, NEUTRAL_STAGE) < prev_stages.get(k, NEUTRAL_STAGE)
         for k in _STAT_KEYS
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BATTLE HELPERS — pure combat maths used by the reward system
+# ═════════════════════════════════════════════════════════════════════════════
+
+_GEN1_HIT_RATE     = 0.85    # ~85% of attacks land (avg accuracy + 1/256 auto-miss)
+_GEN1_CRIT_RATE    = 0.0625  # ~6.25% base crit rate (Speed/512); crits deal 2×
+_APPROX_BASE_POWER = 40      # average early-game physical move base power
+
+
+def gen1_dmg_per_turn(
+    level: int, atk: int, atk_m: float, atk_status: int,
+    opp_def: int, opp_def_m: float,
+    opp_status: int, opp_max_hp: int,
+) -> float:
+    """
+    Approximate Gen 1 damage dealt to the opponent per turn (HP units).
+
+    Formula: ((2*level + 10) / 250) * (Atk * atk_m * offense_mult) / (Def * def_m) * BP + 2
+    Plus the opponent's passive status damage (BRN/PSN = 1/16 max_hp per turn).
+    """
+    offense    = atk * atk_m * status_offense_mult(atk_status)
+    defense    = max(opp_def * opp_def_m, 1.0)
+    level_mult = (2 * level + 10) / 250.0
+    dmg        = level_mult * offense / defense * _APPROX_BASE_POWER + 2.0
+    dmg       += status_passive_dmg(opp_status, opp_max_hp)
+    return max(dmg, 0.001)
+
+
+def combat_survivability(
+    p_hp: int, p_dmg: float, p_spd_eff: float,
+    e_hp: int, e_dmg: float, e_spd_eff: float,
+) -> tuple[float, float, float]:
+    """
+    Returns (adj_turns_to_die, adj_turns_to_kill, surv_ratio).
+
+    p_dmg / e_dmg — pre-computed HP-per-turn damage from gen1_dmg_per_turn().
+    surv_ratio = adj_ttd / adj_ttk  →  >1 player wins, <1 player loses.
+    """
+    ttk = e_hp / p_dmg
+    ttd = p_hp / e_dmg
+
+    adj_ttk = ttk / _GEN1_HIT_RATE
+    adj_ttd = ttd / (1.0 + _GEN1_CRIT_RATE)
+
+    if e_spd_eff > p_spd_eff:
+        adj_ttd = max(adj_ttd - 1.0, 0.001)
+    elif p_spd_eff > e_spd_eff:
+        adj_ttd = adj_ttd + 1.0
+
+    return adj_ttd, adj_ttk, adj_ttd / max(adj_ttk, 0.001)
+
+
+def pokemon_strength(
+    level: int, hp_ratio: float, status: int,
+    atk_stage_mult: float = 1.0,
+    def_stage_mult: float = 1.0,
+) -> float:
+    """Level-proxy combat strength for observation vector bench/party slots."""
+    return (level ** 2) * max(hp_ratio, 0.01) ** 2 * status_mult(status) * atk_stage_mult / max(def_stage_mult, 0.01)
+
+
+def hash_bit_diff(a: int, b: int) -> int:
+    """Hamming distance between two packed integer hashes."""
+    return (a ^ b).bit_count()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# NAVIGATION HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def yfirst_nav_delta(
+    cx: int, cy: int,   # current position
+    px: int, py: int,   # previous position
+    tx: int, ty: int,   # target position
+) -> int:
+    """Y-first Manhattan approach delta.
+
+    Returns a positive value when the step moved closer to (tx, ty):
+    - while cy != ty: tracks vertical progress toward ty
+    - once cy == ty:  tracks horizontal progress toward tx
+    """
+    if py != ty:
+        # previous step hadn't reached target row yet — credit vertical progress
+        return abs(py - ty) - abs(cy - ty)
+    return abs(px - tx) - abs(cx - tx)

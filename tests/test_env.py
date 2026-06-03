@@ -13,7 +13,6 @@ from env import (
     STATE_VEC_SIZE,
     NEW_TILE_REWARD, NEW_MAP_REWARD, DEATH_PENALTY,
     LEVEL_UP_REWARD, BADGE_REWARD,
-    MILESTONE_MAPS,
     MAX_STEPS,
     SCORE_FLOOR,
     _DISTANCE_ACTIVE_MAPS, _DISTANCE_ORIGIN,
@@ -62,14 +61,6 @@ def test_badge_reward_dominates_level_up():
     """A badge should reward more than a level-up (badge is harder to earn)."""
     assert BADGE_REWARD > LEVEL_UP_REWARD
 
-
-def test_milestone_maps_nonempty():
-    assert len(MILESTONE_MAPS) > 0
-
-
-def test_milestone_map_rewards_positive():
-    for map_id, reward in MILESTONE_MAPS.items():
-        assert reward > 0, f"Milestone map {map_id} has non-positive reward {reward}"
 
 
 def test_score_floor_is_negative():

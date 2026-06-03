@@ -466,7 +466,35 @@ MAP_GLOBAL_ORIGIN: dict[int, tuple[int, int]] = {
     198: (128, -174),   # Cerulean Cave B1F     ◆ verify ID
 }
 
-# ── Map width in tiles (east-west, from pixel LR data) ───────────────────────
+# ── Pokecenter entrance tile positions in global tile coords ──────────────────
+# Formula: gx=round((px-1504)/16), gy=round((py-3952)/16)
+# Route 1 anchor: pixel (1504,3952) = global (0,0)
+# ◆ = estimated from MAP_GLOBAL_ORIGIN; update when pixel coords are confirmed.
+PC_ENTRANCE_GLOBAL: dict[int, tuple[int, int]] = {
+    41:  ( 13, -10),   # Viridian City PC  — confirmed px(1714,3792)
+    58:  ( -4, -98),   # Pewter City PC    ◆ estimated
+    59:  ( 66, -148),  # Mt Moon PC        ◆ estimated
+    63:  (214, -156),  # Cerulean City PC  ◆ estimated
+    69:  (172, -165),  # Vermilion City PC ◆ estimated
+    78:  (  0,    0),  # Lavender Town PC  ◆ estimated (no global origin yet)
+    82:  (  0,    0),  # Celadon City PC   ◆ estimated
+    91:  (  0,    0),  # Fuchsia City PC   ◆ estimated
+    96:  (  0,    0),  # Cinnabar Island PC◆ estimated
+    101: (  0,    0),  # Saffron City PC   ◆ estimated
+}
+
+# ── Viridian Forest south-exit local tile targets ────────────────────────────
+# Used for Y-first local navigation when the bot needs a heal and is inside
+# the forest complex.  Values are (player_x, player_y) of the exit tile in
+# that map's local coordinate space.
+# ◆ = estimated from map dimensions; update once confirmed from pixel coords.
+FOREST_SOUTH_EXIT: dict[int, tuple[int, int]] = {
+    51: (15, 47),   # Viridian Forest (34×48)  — south exit  px(2096,3296)
+    50: ( 4,  7),   # Viridian Forest S Gate (10×8) — south door px(1376,3008)
+    # map 47 (N Gate) intentionally excluded — do NOT guide there
+}
+
+
 # Formula: round((LR_x - TL_x) / 16).
 MAP_SIZE: dict[int, int] = {
     # Towns / Cities

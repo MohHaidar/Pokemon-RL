@@ -131,6 +131,51 @@ class ScoreThresholdCallback(BaseCallback):
         return True
 
 
+class RewardBreakdownCallback(BaseCallback):
+    """Log per-episode reward breakdown keys to tensorboard.
+
+    Accumulates reward_breakdown dicts from info across all envs, then logs
+    the per-episode mean of every key once per rollout (every n_steps * n_envs
+    environment steps).  Keys appear in tensorboard under rewards/<key>.
+    """
+
+    def __init__(self):
+        super().__init__(verbose=0)
+        # ep_totals[env_idx][key] = running sum for current episode
+        self._ep_totals: list[dict[str, float]] = []
+        # completed episode totals waiting to be averaged
+        self._finished: list[dict[str, float]] = []
+
+    def _on_training_start(self) -> None:
+        n = self.training_env.num_envs
+        self._ep_totals = [{} for _ in range(n)]
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones", [False] * len(infos))
+        for i, (info, done) in enumerate(zip(infos, dones)):
+            bd = info.get("reward_breakdown", {})
+            for k, v in bd.items():
+                self._ep_totals[i][k] = self._ep_totals[i].get(k, 0.0) + v
+            if done:
+                self._finished.append(dict(self._ep_totals[i]))
+                self._ep_totals[i] = {}
+        return True
+
+    def _on_rollout_end(self) -> None:
+        if not self._finished:
+            return
+        # Aggregate: mean across completed episodes
+        all_keys: set[str] = set()
+        for ep in self._finished:
+            all_keys.update(ep.keys())
+        for key in all_keys:
+            vals = [ep[key] for ep in self._finished if key in ep]
+            if vals:
+                self.logger.record(f"rewards/{key}", sum(vals) / len(vals))
+        self._finished.clear()
+
+
 def make_env(rank: int, seed: int = 0, rom_path: str = "Pokemon_Red.gb", max_steps: int = 8_192):
     def _init():
         env = PokemonRedEnv(rom_path=rom_path, headless=True, max_steps=max_steps)
@@ -157,7 +202,13 @@ def train(
     batch_size_info = max(256, n_envs * 128)
     print(f"[train] Environments ready. batch_size={batch_size_info}, max_steps={max_steps}")
 
-    if resume and Path(resume).exists():
+    if resume:
+        resume_path = Path(resume)
+        if not resume_path.exists() and not Path(resume + ".zip").exists():
+            raise FileNotFoundError(
+                f"Resume file not found: {resume} (tried with and without .zip)\n"
+                f"Check the path and try again."
+            )
         print(f"[train] Resuming from {resume} ...")
         # Scale batch_size with n_envs to keep ~48 minibatches per epoch
         # buffer_size = n_steps × n_envs = 2048 × n_envs
@@ -173,7 +224,7 @@ def train(
             env=vec_env,
             custom_objects={
                 "batch_size":    batch_size,
-                "ent_coef":      0.01,
+                "ent_coef":      0.02,
                 "learning_rate": 1.0e-4,
                 "n_steps":       2048,
                 "n_epochs":      8,
@@ -195,7 +246,7 @@ def train(
             gamma           = 0.99,
             gae_lambda      = 0.95,
             clip_range      = 0.15,
-            ent_coef        = 0.01,
+            ent_coef        = 0.02,
             learning_rate   = 1.0e-4,
             target_kl       = 0.05,    # generous on fresh start — random weights → high variance advantages
             verbose         = 1,
@@ -221,13 +272,14 @@ def train(
         save_path = str(BEST_DIR / "pokemon_ppo_best"),
         verbose   = 1,
     )
+    breakdown_cb = RewardBreakdownCallback()
 
     print(f"[train] Training for {total_timesteps:,} timesteps...")
     print("[train] Press Ctrl+C at any time to save and exit cleanly.")
     try:
         model.learn(
             total_timesteps     = total_timesteps,
-            callback            = [checkpoint_cb, best_cb],
+            callback            = [checkpoint_cb, best_cb, breakdown_cb],
             reset_num_timesteps = True,
             tb_log_name         = "PPO",
         )
