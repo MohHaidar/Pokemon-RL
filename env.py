@@ -118,7 +118,8 @@ RUN_WILD_PENALTY: float = -15.0 # per run after cap (bot is farming low-HP flee 
 RUN_PENALTY:      float = -15.0  # for running when ratio < 0.7 (fleeing when strong)
 
 # ── Explore reward constants ──────────────────────────────────────────────────
-NEW_TILE_REWARD:       float = 1.3
+NEW_TILE_REWARD:       float = 1.7
+PHASE2_TILE_MULT:      float = 2.0   # multiplier on new-tile reward after phase 1 completes
 NEW_MAP_REWARD:      float = 8.0
 WALL_PENALTY:        float = -0.05
 REVISIT_PENALTY:     float = -0.12
@@ -134,7 +135,8 @@ DOOR_SPAM_THRESHOLD: int   = 90    # steps since last map change; < this → spa
 # STOPS in Viridian City so the bot explores freely (Route 22 west, Forest north).
 _DISTANCE_ACTIVE_MAPS: frozenset[int] = frozenset({
     0, 37, 38, 39, 40,          # Pallet Town + its buildings
-    12,                          # Route 1
+    12,                         # Route 1
+    41,                         # Virdian city
 })
 _DISTANCE_ORIGIN: tuple[int, int] = (10, 54)   # global (gx, gy) — center-bottom Pallet
 DISTANCE_REWARD_SCALE: float = 1.0              # reward per tile of new northward max
@@ -155,7 +157,10 @@ BATTLE_IDLE_GRACE:   int   = 60    # steps before idle penalty starts (allows an
 # Once on the same Y row as the entrance, switch to minimising X distance.
 # Replaces the old flat low_hp per-step penalty.
 PC_NAV_STEP_R:    float = 5.0   # reward per step closer to PC entrance (overworld)
-NURSE_NAV_STEP_R: float = 5.0   # reward per step closer to Nurse Joy (inside PC, Y-first)
+NURSE_NAV_STEP_R:    float = 5.0   # reward per step closer to Nurse Joy (inside PC, Y-first)
+NURSE_STAND_STEP_R:  float = 2.0   # per step standing directly in front of Nurse Joy (phase 1)
+NURSE_A_AT_TILE_R:   float = 30.0  # one-shot reward for pressing A at the nurse talk tile (phase 1)
+NURSE_B_PENALTY:     float = -5.0  # penalty for pressing B within 2 tiles of Nurse Joy (phase 1)
 
 # ── Low-PP penalty ────────────────────────────────────────────────────────────
 # PP bytes in RAM encode PP-Ups in bits 6-7; actual current PP = byte & 0x3F.
@@ -168,7 +173,7 @@ LOW_PP_PENALTY: float = -0.8  # per step penalty (same weight as low_hp, stacks 
 # Lower bound: Viridian PC door (global Y = -10) — nothing north of PC is rewarded.
 # Upper bound: just before Pallet Town (global Y = 36) — Pallet excluded so bot
 # isn't incentivised to run south away from the PC.
-PHASE1_TILE_MIN_Y: int = PC_ENTRANCE_GLOBAL[41][1]   # -10 = Viridian PC entrance
+PHASE1_TILE_MIN_Y: int = PC_ENTRANCE_GLOBAL[41][1] - 2   # -10 = Viridian PC entrance
 PHASE1_TILE_MAX_Y: int = 35                           # Route 1 southern edge (Pallet starts at 36)
 
 # ── Catch / ball rewards ──────────────────────────────────────────────────────
@@ -323,7 +328,8 @@ class PokemonRedEnv(gymnasium.Env):
 
         # Pokecenter tracking
         self._prev_lead_hp: int = 0
-        self._nurse_a_done: set = set()                  # map_ids whose first-visit A reward is exhausted
+        self._nurse_a_count: int = 0                     # times nurse_a reward has fired this episode (capped at 10)
+        self._nurse_stand_given: float = 0.0             # total nurse_stand reward given this episode (capped)
         self._prev_nurse_nav_pos: tuple[int,int] | None = None  # local pos last step (for Y-first nurse nav)
         self._min_nurse_dist: tuple = (float("inf"), float("inf"))               # Y-first best approach to Nurse Joy this PC visit
         self._visited_pokecenters: set = set()           # map_ids visited at least once
@@ -401,7 +407,8 @@ class PokemonRedEnv(gymnasium.Env):
         self._battle_idle_steps      = 0
 
         self._prev_lead_hp           = 0
-        self._nurse_a_done           = set()
+        self._nurse_a_count          = 0
+        self._nurse_stand_given      = 0.0
         self._prev_nurse_nav_pos     = None
         self._min_nurse_dist     = (float("inf"), float("inf"))
         self._visited_pokecenters    = set()
@@ -834,6 +841,7 @@ class PokemonRedEnv(gymnasium.Env):
             self._visited_coords.add(coord)
             self._stale_steps = 0
             # Phase 1: only reward tiles south of / at the Viridian PC door (global Y ≥ -10)
+            # Phase 2: exclude Pallet Town + Route 1 (bot should push north, not backtrack)
             give_tile = True
             if not self._phase1_done:
                 if map_id in MAP_GLOBAL_ORIGIN:
@@ -841,9 +849,13 @@ class PokemonRedEnv(gymnasium.Env):
                     give_tile = PHASE1_TILE_MIN_Y <= gy <= PHASE1_TILE_MAX_Y
                 else:
                     give_tile = False  # indoor/dungeon maps excluded in Phase 1
+            else:
+                if map_id in _DISTANCE_ACTIVE_MAPS:
+                    give_tile = False  # Pallet Town + Route 1 excluded in Phase 2
             if give_tile:
-                reward += NEW_TILE_REWARD * explore_mult * tile_mult
-                bd["new_tile"] = bd.get("new_tile", 0.0) + NEW_TILE_REWARD * explore_mult * tile_mult
+                phase_mult = PHASE2_TILE_MULT if self._phase1_done else 1.0
+                reward += NEW_TILE_REWARD * explore_mult * tile_mult * phase_mult
+                bd["new_tile"] = bd.get("new_tile", 0.0) + NEW_TILE_REWARD * explore_mult * tile_mult * phase_mult
         else:
             # Count every non-battle step without a new tile (includes noops/standing still)
             if not in_battle:
@@ -1070,7 +1082,6 @@ class PokemonRedEnv(gymnasium.Env):
             if prev_lead_hp_now > 0 and lead and lead["hp"] == 0:
                 reward += DEATH_PENALTY
                 bd["death"] = bd.get("death", 0.0) + DEATH_PENALTY
-                print("Lead fainted penalty!")
 
             # Freeze exploit: bot stays in battle with lead HP=0 instead of pressing A.
             # After a short animation grace, apply heavy per-step penalty.
@@ -1134,7 +1145,7 @@ class PokemonRedEnv(gymnasium.Env):
                 self._prev_nav_pos = None        # reset nav delta on death
                 self._prev_nurse_nav_pos = None  # reset nurse nav delta on death
                 self._min_nurse_dist     = (float("inf"), float("inf"))
-                # _nurse_a_done intentionally NOT reset on death — first-visit reward is once per episode
+                # _nurse_a_count intentionally NOT reset on death — carries across deaths
 
         # ── PC navigation (Y-first) + Low PP penalty ─────────────────────
         if lead:
@@ -1201,7 +1212,6 @@ class PokemonRedEnv(gymnasium.Env):
                 if not self._just_respawned:
                     reward += 3.0
                     bd["pokecenter_visit"] = bd.get("pokecenter_visit", 0.0) + 3.0
-                    print("Pokecenter first visit! +3.0")
 
             # Arrive-at-low-HP bonus
             if prev.get("map_id") not in POKECENTER_MAPS and lead_hp_r < 0.25:
@@ -1218,11 +1228,33 @@ class PokemonRedEnv(gymnasium.Env):
                     bd["nurse_nav"] = bd.get("nurse_nav", 0.0) + NURSE_NAV_STEP_R
                 self._prev_nurse_nav_pos = (player_x, player_y)
 
-            # A-press reward: once per PC per episode (first A press only)
-            if action == 5 and map_id not in self._nurse_a_done:
-                reward += 0.1
-                bd["nurse_a"] = bd.get("nurse_a", 0.0) + 0.1
-                self._nurse_a_done.add(map_id)  # consume — no more A rewards this map this episode
+            # Per-step standing bonus at the nurse talk tile (phase 1, capped at 100).
+            if (not self._phase1_done
+                    and player_x == nurse_pos[0] and player_y == nurse_pos[1]
+                    and self._nurse_stand_given < 100.0):
+                grant = min(NURSE_STAND_STEP_R, 100.0 - self._nurse_stand_given)
+                reward += grant
+                self._nurse_stand_given += grant
+                bd["nurse_stand"] = bd.get("nurse_stand", 0.0) + grant
+
+            # A-press reward: once per episode, only when at the nurse talk tile
+            # and still needs a heal. Directly rewards the action we want.
+            # Phase 1 only. Fires up to 10 times per episode.
+            if (not self._phase1_done
+                    and action == 5
+                    and player_x == nurse_pos[0] and player_y == nurse_pos[1]
+                    and lead_hp_r < 1.0
+                    and self._nurse_a_count < 10):
+                reward += NURSE_A_AT_TILE_R
+                bd["nurse_a"] = bd.get("nurse_a", 0.0) + NURSE_A_AT_TILE_R
+                self._nurse_a_count += 1
+
+            # B-press penalty: pressing B at the nurse talk tile dismisses dialogue (phase 1 only).
+            if (not self._phase1_done
+                    and action == 6
+                    and player_x == nurse_pos[0] and player_y == nurse_pos[1]):
+                reward += NURSE_B_PENALTY
+                bd["nurse_b"] = bd.get("nurse_b", 0.0) + NURSE_B_PENALTY
 
             # Heal rewards — two independent checks, both with 150-step cooldown.
             prev_party = self._prev_state.get("party", [])
@@ -1241,6 +1273,7 @@ class PokemonRedEnv(gymnasium.Env):
                 self._prev_nurse_nav_pos = None  # restart nav tracking after heal
                 self._min_nurse_dist     = (float("inf"), float("inf"))
                 self._phase1_done = True         # unlock exploration rewards
+                self._visited_coords = set()     # full reset — phase 2 re-earns all tiles at 2×
                 print(f"Normal heal reward! +{POKECENTER_HEAL:.0f}")
 
             # 2) Once-per-episode heal: VRAM "We hope to see you again!" = nurse finished healing
@@ -1257,13 +1290,13 @@ class PokemonRedEnv(gymnasium.Env):
                         self._prev_nurse_nav_pos = None  # restart nav tracking after heal
                         self._min_nurse_dist     = (float("inf"), float("inf"))
                         self._phase1_done = True         # unlock exploration rewards
+                        self._visited_coords = set()     # full reset — phase 2 re-earns all tiles at 2×
                         print(f"Once-per-episode heal reward! +{heal_once_r:.0f}")
         else:
             if prev.get("map_id") in POKECENTER_MAPS:
-                prev_pc = prev.get("map_id", -1)
-                self._nurse_a_done.add(prev_pc)   # first visit over; no more A rewards on re-entry
-                self._prev_nurse_nav_pos = None    # clear nurse nav when leaving PC
-                self._min_nurse_dist     = (float("inf"), float("inf"))
+                self._prev_nurse_nav_pos = None    # clear position tracking when leaving PC
+                # _min_nurse_dist intentionally NOT reset here — persists until heal or death
+                # to prevent the boundary exploit (enter→approach→exit→enter→farm repeatedly)
 
         # ── Low-HP recovery reward ────────────────────────────────────────────
         # Reward any transition from below LOW_HP_THRESHOLD to above it (nurse heal,
@@ -1275,7 +1308,6 @@ class PokemonRedEnv(gymnasium.Env):
             if prev_hr_r < LOW_HP_THRESHOLD and lead_hp_r >= LOW_HP_THRESHOLD:
                 reward += LOW_HP_HEAL_REWARD
                 bd["low_hp_heal"] = bd.get("low_hp_heal", 0.0) + LOW_HP_HEAL_REWARD
-                print(f"Low-HP recovery reward! +{LOW_HP_HEAL_REWARD:.0f}")
 
         # ── Phase 1 curriculum: suppress exploration until first heal ────────
         # Exploration rewards are withheld until the bot has healed at least once

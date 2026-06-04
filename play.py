@@ -201,7 +201,7 @@ def play(
         # ── Accumulate debug stats ────────────────────────────────────────
         ep_low_hp      += bd.get("low_hp",          0.0)
         ep_crit_battle += bd.get("critical_battle",  0.0)
-        ep_nurse_prox  += bd.get("nurse_nav",        0.0)
+        ep_nurse_prox  += bd.get("nurse_nav", 0.0) + bd.get("nurse_stand", 0.0) + bd.get("nurse_a", 0.0)
         if "pokecenter_heal" in bd:
             steps_since_heal = 0
         else:

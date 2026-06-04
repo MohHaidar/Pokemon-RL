@@ -85,7 +85,7 @@ class DemoDataset(Dataset):
         print("  Action distribution:")
         for i, name in enumerate(_ACTION_NAMES):
             n = int((self.acts == i).sum())
-            bar = "█" * int(50 * n / max(total_steps, 1))
+            bar = "#" * int(50 * n / max(total_steps, 1))
             print(f"    {i} {name:7s}  {n:6d}  {100*n/max(total_steps,1):5.1f}%  {bar}")
 
     def __len__(self) -> int:
@@ -153,12 +153,13 @@ def bc_train(
     policy    = model.policy.to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
-    lstm_hidden = model.policy.lstm_actor.hidden_size
+    lstm_hidden  = model.policy.lstm_actor.hidden_size
+    lstm_n_layers = model.policy.lstm_actor.num_layers
 
     n_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     print(f"  Parameters: {n_params:,}")
     print(f"\n[BC] Training  epochs={n_epochs}  batch={batch_size}  lr={lr}")
-    print(f"     {len(dataset):,} demo steps  →  {len(loader):,} batches/epoch\n")
+    print(f"     {len(dataset):,} demo steps  ->  {len(loader):,} batches/epoch\n")
 
     best_loss = float("inf")
 
@@ -177,7 +178,7 @@ def bc_train(
 
             # Zero LSTM state — every step is treated as the start of a new
             # episode during BC so the LSTM doesn't matter yet.
-            h0 = torch.zeros(1, n, lstm_hidden, device=device)
+            h0 = torch.zeros(lstm_n_layers, n, lstm_hidden, device=device)
             c0 = torch.zeros_like(h0)
             lstm_states  = RNNStates(pi=(h0, c0), vf=(h0, c0))
             ep_starts    = torch.ones(n, dtype=torch.float32, device=device)
@@ -212,7 +213,7 @@ def bc_train(
         avg_acc  = 100.0 * epoch_acc / max(n_batches, 1)
         scheduler.step()
 
-        marker = " ◀ best" if avg_loss < best_loss else ""
+        marker = " << best" if avg_loss < best_loss else ""
         if avg_loss < best_loss:
             best_loss = avg_loss
         print(f"  Epoch {epoch:3d}/{n_epochs}  loss={avg_loss:.4f}  acc={avg_acc:.1f}%{marker}")
@@ -221,10 +222,9 @@ def bc_train(
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     model.policy = policy.cpu()
     model.save(output_path)
-    print(f"\n[BC] Saved → {output_path}.zip")
-    print(f"\n     ┌─ Next step ──────────────────────────────────────────────────")
-    print(f"     │  uv run python train.py --resume {output_path}")
-    print(f"     └──────────────────────────────────────────────────────────────")
+    print(f"\n[BC] Saved -> {output_path}.zip")
+    print(f"\n     Next step:")
+    print(f"     uv run python train.py --resume {output_path}")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
